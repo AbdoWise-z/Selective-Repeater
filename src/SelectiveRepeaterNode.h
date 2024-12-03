@@ -45,6 +45,11 @@ struct ReceiverWindowEntry{
     bool recieved;
 };
 
+struct ProcessResult {
+    std::vector<RawFrame_Base*> frames;
+    cMessage* associated_timer;
+};
+
 class SelectiveRepeaterNode : public cSimpleModule
 {
   protected:
@@ -55,16 +60,15 @@ class SelectiveRepeaterNode : public cSimpleModule
     std::ofstream _log;
 
     std::vector<FrameWithFlags> msgQueue;      // messages from the input file
-    FrameWithFlags currentFrame;
     std::vector<ReceiverWindowEntry> receiverWindow;
     std::vector<SenderWindowEntry> senderWindow;
     int last_sent_sq     = 0;
     int expected_recv_sq = 0;
     int window_recv_start_sq = 0;
     bool nack_sent = false;
-    cMessage* ackTimer;
+    // cMessage* ackTimer;
     cMessage* processTimer;
-    std::vector<RawFrame_Base*> processedFrames;
+    std::vector<ProcessResult> processSchedular;
 
     void _start_as_sender();
     void _send_next_message();

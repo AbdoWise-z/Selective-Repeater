@@ -190,8 +190,11 @@ void SelectiveRepeaterNode::_send_next_message() {
         return; // already processing a packet
     }
 
-    if (processedFrames.size() > 0) {
-        throw std::runtime_error("Already trying to process");
+    if (processSchedular.size() != 0) {
+        // EV << "_send_next_message() called while process queue wasn't empty." << std::endl;
+        // start processing the next one
+        scheduleAfter(pPar("PT").doubleValue() , processTimer);
+        return;
     }
 
     int WS = pPar("WS").intValue();
@@ -199,11 +202,9 @@ void SelectiveRepeaterNode::_send_next_message() {
         return; // we can't send any more messages
     }
 
-    scheduleAfter(pPar("PT").doubleValue() , processTimer);
 
     auto next = msgQueue[0];
     msgQueue.erase(msgQueue.begin());
-    currentFrame = next;
 
     EV << "Sending: " << reverseByteStuffing(from_bit_stream(next.frame->getM_payload()), pPar("ESCAPE_BYTE").stringValue()[0] ) << std::endl;
     _log << "At time [" << simTime() << "], Node[" << _node_id << "] , Introducing channel error with code =[" << next.flags << "]." << std::endl;
@@ -224,15 +225,15 @@ void SelectiveRepeaterNode::_send_next_message() {
     senderWindow.push_back(ent);
 
     // now process the errors
-    processedFrames.clear();
-    processedFrames.push_back(next.frame->dup());
+    std::vector<RawFrame_Base*> frames;
+    frames.push_back(next.frame->dup());
 
     if (is_duplicated) {
-        processedFrames.push_back(next.frame->dup());
+        frames.push_back(next.frame->dup());
     }
 
     if (is_modified) {
-        for (auto& frame: processedFrames) {
+        for (auto& frame: frames) {
             std::string payload = frame->getM_payload();
             int _bit = int(uniform(0, payload.size()));
             payload[_bit] = payload[_bit] == '1' ? '0' : '1'; // flip it
@@ -241,13 +242,19 @@ void SelectiveRepeaterNode::_send_next_message() {
         }
     }
 
-    for (int i = 0;i < processedFrames.size();i++) {
-        auto& frame = processedFrames[i];
+    for (int i = 0;i < frames.size();i++) {
+        auto& frame = frames[i];
         frame->setM_header(senderWindow.back().sq_num);
         frame->setDup_index(is_duplicated + i);
         frame->setChannel_delay(is_delayed ? pPar("ED").doubleValue() : 0.0);
         frame->setIs_lost(is_lost);
     }
+
+    ProcessResult result;
+    result.associated_timer = ent.timer;
+    result.frames = frames;
+    processSchedular.push_back(result);
+    scheduleAfter(pPar("PT").doubleValue() , processTimer);
 }
 
 void SelectiveRepeaterNode::initialize()
@@ -264,7 +271,7 @@ void SelectiveRepeaterNode::initialize()
     }
 
     nack_sent = false;
-    ackTimer = new cMessage("ack_timer");
+    // ackTimer = new cMessage("ack_timer");
     processTimer = new cMessage("process_timer");
 
     _log.open(pPar("LOG_FILE").stringValue(), std::ios::app);
@@ -342,18 +349,23 @@ void SelectiveRepeaterNode::handleMessage(cMessage *msg)
         }
         else if (strcmp(msg->getName(), "process_timer") == 0) {
             // successful process
-            for (auto pf : processedFrames) {
+            auto result = processSchedular[0];
+            processSchedular.erase(processSchedular.begin());
+
+            for (auto pf : result.frames) {
+                // send the frames on the virtual channel (self message)
                 scheduleAfter(pf->getDup_index() != 0 ? (pf->getDup_index() - 1) * pPar("DD").doubleValue() : 0, pf);
             }
 
-            if (senderWindow.size() && senderWindow.back().sq_num == processedFrames[0]->getM_header()){
-                scheduleAfter(pPar("TO").doubleValue(), senderWindow.back().timer);
+            if (result.associated_timer != nullptr){
+                // if this should set a timer .. then set it
+                scheduleAfter(pPar("TO").doubleValue(), result.associated_timer);
             }
 
-            processedFrames.clear();
             _send_next_message();
         }
         else if (strcmp(msg->getName(), "ack_timer") == 0) {
+            // not mentioned in the project document ..
 //            auto f = new RawFrame_Base();
 //            f->setM_Type(1);
 //            f->setM_Target(expected_recv_sq);
@@ -365,6 +377,17 @@ void SelectiveRepeaterNode::handleMessage(cMessage *msg)
             for (auto& ent : senderWindow) {
                 if (ent.timer == msg) {
                     // re-send
+
+                    if (processTimer->isScheduled()) {
+                        // roll-back last frame we were processing
+                        EV << "Rolled Back: "
+                           << ( processSchedular.front().frames[0]->getM_Type() == 2 ?
+                                   reverseByteStuffing(from_bit_stream(processSchedular.front().frames[0]->getM_payload()), pPar("ESCAPE_BYTE").stringValue()[0] )
+                                   : (processSchedular.front().frames[0]->getM_Type() == 0 ? "NACK" : "ACK") )
+                           << std::endl;
+                        cancelEvent(processTimer);
+                    }
+
                     EV << "Timeout on: " << ent.sq_num << std::endl;
                     auto f = new RawFrame_Base();
                     f->setM_Target(ent.original_frame->getM_Target());
@@ -375,10 +398,13 @@ void SelectiveRepeaterNode::handleMessage(cMessage *msg)
 
                     EV << "Timer Rest" << std::endl;
                     _log << "Time out event at time [" << simTime() << "], at Node["
-                            << _node_id << "] for frame with seq_num=[" << ent.sq_num << "]\n";
+                         << _node_id << "] for frame with seq_num=[" << ent.sq_num << "]\n";
 
-                    scheduleAfter(0, f);
-                    scheduleAfter(pPar("TO").doubleValue(), ent.timer); // reset the timer
+                    ProcessResult result;
+                    result.frames.push_back(f);
+                    result.associated_timer = ent.timer;
+                    processSchedular.insert(processSchedular.begin(), result);
+                    scheduleAfter(0.001 + pPar("PT").doubleValue(), processTimer);
                     break;
                 }
             }
@@ -405,17 +431,6 @@ void SelectiveRepeaterNode::handleMessage(cMessage *msg)
             auto window_start = window_recv_start_sq;
             auto window_end   = (window_recv_start_sq + pPar("WS").intValue()) % (pPar("SN").intValue() + 1);
             EV << "Receiver Window: " << window_start << " -> " << window_end << std::endl;
-            if (sq != expected_recv_sq && !nack_sent) {
-                nack_sent = true; // send a NACK
-                auto f = new RawFrame_Base();
-                f->setM_Type(0);
-                f->setM_Target(expected_recv_sq);
-                scheduleAfter(pPar("PT").doubleValue(), f);
-                EV << "Receiver: Sending NACK (out of order)" << std::endl;
-            } else {
-                cancelEvent(ackTimer);
-                rescheduleAfter(pPar("TO").doubleValue(), ackTimer);
-            }
 
             std::string payload = frame->getM_payload();
             std::string crc     = frame->getM_Trailer();
@@ -424,6 +439,27 @@ void SelectiveRepeaterNode::handleMessage(cMessage *msg)
                 EV << "Receiver: CRC OK [" << sq << "] \"" << reverseByteStuffing(from_bit_stream(frame->getM_payload()), pPar("ESCAPE_BYTE").stringValue()[0] ) << "\"" << std::endl;
                 // valid packet
                 if (inCircular(sq, window_start, window_end, pPar("SN").intValue() + 1)) {
+
+                    if (sq != expected_recv_sq && nack_sent){
+                        auto f = new RawFrame_Base(); // send ACK if a NACK has already been sent and the packet is out of order
+                        f->setM_Type(1);
+                        f->setM_Target(expected_recv_sq);
+                        scheduleAfter(pPar("PT").doubleValue(), f);
+                        EV << "Receiver: Sending ACK (out of order)" << std::endl;
+                    }
+
+                    if (sq != expected_recv_sq && !nack_sent) {
+                        nack_sent = true; // send a NACK
+                        auto f = new RawFrame_Base();
+                        f->setM_Type(0);
+                        f->setM_Target(expected_recv_sq);
+                        scheduleAfter(pPar("PT").doubleValue(), f);
+                        EV << "Receiver: Sending NACK (out of order)" << std::endl;
+                    } else {
+        //                cancelEvent(ackTimer);
+        //                rescheduleAfter(pPar("TO").doubleValue(), ackTimer);
+                    }
+
                     EV << "Receiver: Packet in the Receive Window" << std::endl;
                     auto& rs = receiverWindow[sq % pPar("WS").intValue()];
                     if (!rs.recieved) {
@@ -466,7 +502,7 @@ void SelectiveRepeaterNode::handleMessage(cMessage *msg)
             } else {
                 EV << "Receiver: CRC ERROR [" << sq << "]" << std::endl;
                 // checksum (CRC) error
-                if (!nack_sent) { // if no nack was sent. send NACK
+                if (!nack_sent && sq == expected_recv_sq) { // if no nack was sent. send NACK
                     nack_sent = true; // send a nack
                     auto f = new RawFrame_Base();
                     f->setM_Type(0);
@@ -492,18 +528,21 @@ void SelectiveRepeaterNode::handleMessage(cMessage *msg)
 
                         if (processTimer->isScheduled()) {
                             // roll-back last frame we were processing
-                            EV << "Rolled Back: " << reverseByteStuffing(from_bit_stream(currentFrame.frame->getM_payload()), pPar("ESCAPE_BYTE").stringValue()[0] ) << std::endl;
-                            cancelEvent(processTimer);
-                            cancelEvent(senderWindow.back().timer);
-                            senderWindow.pop_back();
-                            last_sent_sq--;
-                            if (last_sent_sq < 0){
-                                last_sent_sq += pPar("SN").intValue();
-                            }
-                            msgQueue.insert(msgQueue.begin(), currentFrame);
-                        }
+                            EV << "Rolled Back: "
+                               << ( processSchedular.front().frames[0]->getM_Type() == 2 ?
+                                       reverseByteStuffing(from_bit_stream(processSchedular.front().frames[0]->getM_payload()), pPar("ESCAPE_BYTE").stringValue()[0] )
+                                    : (processSchedular.front().frames[0]->getM_Type() == 0 ? "NACK" : "ACK") )
+                               << std::endl;
 
-                        processedFrames.clear();
+                            cancelEvent(processTimer);
+//                            cancelEvent(senderWindow.back().timer);
+//                            senderWindow.pop_back();
+//                            last_sent_sq--;
+//                            if (last_sent_sq < 0){
+//                                last_sent_sq += pPar("SN").intValue();
+//                            }
+//                            msgQueue.insert(msgQueue.begin(), currentFrame);
+                        }
 
                         auto f = new RawFrame_Base();
                         f->setM_Target(it->original_frame->getM_Target());
@@ -511,9 +550,14 @@ void SelectiveRepeaterNode::handleMessage(cMessage *msg)
                         f->setM_payload(it->original_frame->getM_payload());
                         f->setM_Type(it->original_frame->getM_Type());
                         f->setM_Trailer(it->original_frame->getM_Trailer());
-                        processedFrames.push_back(f);
-                        scheduleAfter(0.001 + pPar("PT").doubleValue(), processTimer);
+
                         cancelEvent(it->timer);
+
+                        ProcessResult result;
+                        result.frames.push_back(f);
+                        result.associated_timer = nullptr;
+                        processSchedular.insert(processSchedular.begin(), result);
+                        scheduleAfter(0.001 + pPar("PT").doubleValue(), processTimer);
                         break;
                     }
                     ++it;

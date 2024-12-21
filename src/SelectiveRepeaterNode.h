@@ -59,7 +59,7 @@ class SelectiveRepeaterNode : public cSimpleModule
     int _node_id;
     std::ofstream _log;
 
-    std::vector<FrameWithFlags> msgQueue;      // messages from the input file
+    std::vector<FrameWithFlags> msgQueue;              // messages from the input file
     std::vector<ReceiverWindowEntry> receiverWindow;
     std::vector<SenderWindowEntry> senderWindow;
     int last_sent_sq     = 0;

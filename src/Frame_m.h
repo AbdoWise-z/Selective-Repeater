@@ -58,11 +58,11 @@ class Frame;
 class Frame_Base : public ::omnetpp::cPacket
 {
   protected:
-    int M_header = 0;
-    omnetpp::opp_string M_payload;
-    omnetpp::opp_string M_Trailer;
-    int M_Type = 0;
-    int M_Target = 0;
+    int M_header = 0;  // sequence number
+    omnetpp::opp_string M_payload; // message in binary
+    omnetpp::opp_string M_Trailer; // CRC check
+    int M_Type = 0;    // 0 -> data, 1 -> ACK, 2 -> NACK
+    int M_Target = 0;  // ACK number
 
   private:
     void copy(const Frame_Base& other);

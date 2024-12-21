@@ -15,134 +15,16 @@
 
 #include "SelectiveRepeaterNode.h"
 #include "common.h"
+#include "byte_utils.h"
+#include "crc.h"
 
 Define_Module(SelectiveRepeaterNode);
 
-static inline std::string performByteStuffing(std::string msg, char flag, char esc) {
-    std::ostringstream output;
-    output << flag;
-    for (auto c : msg) {
-        if (c == flag || c == esc) {
-            output << esc;
-        }
-        output << c;
-    }
-
-    output << flag;
-    return output.str();
-}
-
-static inline std::string reverseByteStuffing(std::string msg, char esc) {
-    msg = msg.substr(1, msg.size() - 2);
-    std::ostringstream output;
-    bool dont_skip = false;
-    for (auto c : msg) {
-        if (c == esc && dont_skip == false) {
-            dont_skip = true;
-            continue;
-        }
-        dont_skip = false;
-        output << c;
-    }
-    return output.str();
-}
-
-// Converts a char to its binary bit stream representation
-static inline std::string to_bit_stream(char c) {
-    std::string bitStream;
-    for (int i = 7; i >= 0; --i) {
-        bitStream += ((c >> i) & 1) ? '1' : '0';
-    }
-    return bitStream;
-}
-
-// Converts a binary bit stream back to a char
-static inline char char_from_bit_stream(const std::string& bitStream) {
-    if (bitStream.size() != 8) {
-        throw std::invalid_argument("Bit stream must be exactly 8 bits long.");
-    }
-
-    char c = 0;
-    for (size_t i = 0; i < 8; ++i) {
-        if (bitStream[i] == '1') {
-            c |= (1 << (7 - i));
-        } else if (bitStream[i] != '0') {
-            throw std::invalid_argument("Bit stream must contain only '0' or '1'.");
-        }
-    }
-    return c;
-}
-
-static inline std::string to_bit_stream(std::string msg) {
-    std::string output = "";
-    for (auto c : msg) {
-        output += to_bit_stream(c);
-    }
-
-    return output;
-}
-
-static inline std::string from_bit_stream(std::string msg) {
-    std::string output = "";
-    int len = msg.size();
-    if (len % 8 != 0) {
-        throw std::invalid_argument("Bit stream must be exactly 8 * K bits long.");
-    }
-
-    len = len / 8;
-    for (int i = 0;i < len;i++) {
-        output += char_from_bit_stream(msg.substr(i * 8, 8));
-    }
-
-    return output;
-}
-
-// Function to perform XOR between two binary strings
-std::string xorStrings(const std::string& a, const std::string& b) {
-    std::string result;
-    for (size_t i = 0; i < b.size(); ++i) {
-        result += (a[i] == b[i]) ? '0' : '1';
-    }
-    return result;
-}
-
-// Function to compute CRC
-static inline std::string calculateCRC(std::string bits, std::string generator) {
-    int generatorSize = generator.size();
-
-    // Append zeros equal to the size of the generator - 1 to the input bits
-    bits += std::string(generatorSize - 1, '0');
-
-    std::string remainder = bits.substr(0, generatorSize);
-
-    for (size_t i = generatorSize; i <= bits.size(); ++i) {
-        // Perform XOR if the leftmost bit is '1'
-        if (remainder[0] == '1') {
-            remainder = xorStrings(remainder, generator);
-        }
-
-        // Shift left and append the next bit from bits if available
-        if (i < bits.size()) {
-            remainder = remainder.substr(1) + bits[i];
-        } else {
-            remainder = remainder.substr(1);
-        }
-    }
-
-    return remainder;
-}
-
-// Function to evaluate CRC
-static inline bool evaluateCRC(const std::string& transmitted, const std::string& generator) {
-    std::string remainder = calculateCRC(transmitted, generator);
-    return remainder.find('1') == std::string::npos; // Valid if remainder is all zeros
-}
 
 static inline bool inCircular(int p, int start, int end, int mod){
     if (end > start) {
         return p >= start && p < end;
     }
-
     return (p >= start && p < mod) || (p < end);
 }
 
@@ -161,7 +43,8 @@ void SelectiveRepeaterNode::_start_as_sender() {
             performByteStuffing(
                 message,
                 pPar("FLAG_BYTE").stringValue()[0],
-                pPar("ESCAPE_BYTE").stringValue()[0])
+                pPar("ESCAPE_BYTE").stringValue()[0]
+            )
          );
 
         frame->setM_payload(
@@ -250,12 +133,14 @@ void SelectiveRepeaterNode::_send_next_message() {
         frame->setIs_lost(is_lost);
     }
 
+
     ProcessResult result;
     result.associated_timer = ent.timer;
     result.frames = frames;
     processSchedular.push_back(result);
     scheduleAfter(pPar("PT").doubleValue() , processTimer);
 }
+
 
 void SelectiveRepeaterNode::initialize()
 {
@@ -276,6 +161,7 @@ void SelectiveRepeaterNode::initialize()
 
     _log.open(pPar("LOG_FILE").stringValue(), std::ios::app);
 }
+
 
 void SelectiveRepeaterNode::handleMessage(cMessage *msg)
 {
@@ -328,12 +214,17 @@ void SelectiveRepeaterNode::handleMessage(cMessage *msg)
                     scheduleAfter(rawFrame->getChannel_delay() + pPar("TD").doubleValue(), f);
                 }
             } else { // ACK-NACK
-                auto f = new Frame_Base();
-                f->setM_Type(rawFrame->getM_Type());
-                f->setM_Target(rawFrame->getM_Target());
-                scheduleAfter(pPar("TD").doubleValue(), f);
-                EV << "Receiver: Sending " << (f->getM_Type() == 1 ? "ACK" : "NACK") << "-" << f->getM_Target() << std::endl;
+                auto lb = pPar("LP").doubleValue();
+                volatile double rand = uniform(0, 1);
+                bool drop = rand < lb;
 
+                if (!drop){
+                    auto f = new Frame_Base();
+                    f->setM_Type(rawFrame->getM_Type());
+                    f->setM_Target(rawFrame->getM_Target());
+                    scheduleAfter(pPar("TD").doubleValue(), f);
+                    EV << "Receiver: Sending " << (f->getM_Type() == 1 ? "ACK" : "NACK") << "-" << f->getM_Target() << std::endl;
+                }
                 _log << "At time["
                         << simTime()
                         << "], Node["
@@ -343,7 +234,7 @@ void SelectiveRepeaterNode::handleMessage(cMessage *msg)
                         << "] with number ["
                         << rawFrame->getM_Target()
                         << "] , loss ["
-                        << (rawFrame->getIs_lost() ? "Yes" : "No")
+                        << (drop ? "Yes" : "No")
                         << "]" << std::endl;
             }
         }
@@ -418,12 +309,14 @@ void SelectiveRepeaterNode::handleMessage(cMessage *msg)
         // so start processing packets from input file :)
         _start_as_sender();
     } else {
+
         auto* frame = dynamic_cast<Frame_Base*>(msg);
         if (!frame) {
             throw std::runtime_error("somehow got something other than a frame in receiving logic");
         }
 
         if (frame->getM_Type() == 2) { // DATA
+            // Receiver code
             // check if we can receive it
             auto sq = frame->getM_header();
             EV << "Received Data At: " << simTime() << std::endl;
@@ -435,82 +328,87 @@ void SelectiveRepeaterNode::handleMessage(cMessage *msg)
             std::string payload = frame->getM_payload();
             std::string crc     = frame->getM_Trailer();
 
-            if (evaluateCRC(payload + crc, pPar("CRC_GENERATOR").stringValue())) {
-                EV << "Receiver: CRC OK [" << sq << "] \"" << reverseByteStuffing(from_bit_stream(frame->getM_payload()), pPar("ESCAPE_BYTE").stringValue()[0] ) << "\"" << std::endl;
-                // valid packet
-                if (inCircular(sq, window_start, window_end, pPar("SN").intValue() + 1)) {
-
-                    if (sq != expected_recv_sq && nack_sent){
-                        auto f = new RawFrame_Base(); // send ACK if a NACK has already been sent and the packet is out of order
-                        f->setM_Type(1);
-                        f->setM_Target(expected_recv_sq);
-                        scheduleAfter(pPar("PT").doubleValue(), f);
-                        EV << "Receiver: Sending ACK (out of order)" << std::endl;
-                    }
-
-                    if (sq != expected_recv_sq && !nack_sent) {
-                        nack_sent = true; // send a NACK
-                        auto f = new RawFrame_Base();
-                        f->setM_Type(0);
-                        f->setM_Target(expected_recv_sq);
-                        scheduleAfter(pPar("PT").doubleValue(), f);
-                        EV << "Receiver: Sending NACK (out of order)" << std::endl;
-                    } else {
-        //                cancelEvent(ackTimer);
-        //                rescheduleAfter(pPar("TO").doubleValue(), ackTimer);
-                    }
-
-                    EV << "Receiver: Packet in the Receive Window" << std::endl;
-                    auto& rs = receiverWindow[sq % pPar("WS").intValue()];
-                    if (!rs.recieved) {
-                        rs.frame = frame;
-                        rs.recieved = true;
-                        auto is_expected = receiverWindow[expected_recv_sq % pPar("WS").intValue()].recieved;
-                        int move_count = 0;
-                        while (receiverWindow[expected_recv_sq % pPar("WS").intValue()].recieved) {
-                            // TO Network layer
-                            nack_sent = false;
-                            auto& curr = receiverWindow[expected_recv_sq % pPar("WS").intValue()];
-                            curr.recieved = false;
-                            auto original = from_bit_stream(curr.frame->getM_payload());
-
-                            _log << "Uploading payload=["
-                                    << reverseByteStuffing(original, pPar("ESCAPE_BYTE").stringValue()[0])
-                                    << "] and seq_num=["
-                                    << curr.frame->getM_header()
-                                    << "] to the network layer" << std::endl;
-
-                            expected_recv_sq = (expected_recv_sq + 1) % (pPar("SN").intValue() + 1);
-                            move_count ++;
-                        }
-                        EV << "Moving Receiver Window: " << move_count << std::endl;
-                        window_recv_start_sq = expected_recv_sq;
-                        if (is_expected){
-                            auto f = new RawFrame_Base();
-                            f->setM_Type(1); // ACK
+            if (!inCircular(sq, window_start, window_end, pPar("SN").intValue() + 1)) {
+                // frame is outside of the window, drop
+                EV << "Receiver: Packet dropped (out of window)" << std::endl;
+            } else {
+                if (evaluateCRC(payload + crc, pPar("CRC_GENERATOR").stringValue())) {
+                    EV << "Receiver: CRC OK [" << sq << "] \"" << reverseByteStuffing(from_bit_stream(frame->getM_payload()), pPar("ESCAPE_BYTE").stringValue()[0] ) << "\"" << std::endl;
+                    // valid packet
+                    if (inCircular(sq, window_start, window_end, pPar("SN").intValue() + 1)) {
+                        if (sq != expected_recv_sq && nack_sent){
+                            auto f = new RawFrame_Base(); // send ACK if a NACK has already been sent and the packet is out of order
+                            f->setM_Type(1);
                             f->setM_Target(expected_recv_sq);
                             scheduleAfter(pPar("PT").doubleValue(), f);
+                            EV << "Receiver: Sending ACK (out of order)" << std::endl;
+                        }
+
+                        if (sq != expected_recv_sq && !nack_sent) {
+                            nack_sent = true; // send a NACK
+                            auto f = new RawFrame_Base();
+                            f->setM_Type(0);
+                            f->setM_Target(expected_recv_sq);
+                            scheduleAfter(pPar("PT").doubleValue(), f);
+                            EV << "Receiver: Sending NACK (out of order)" << std::endl;
+                        }
+
+                        EV << "Receiver: Packet in the Receive Window" << std::endl;
+                        auto& rs = receiverWindow[sq % pPar("WS").intValue()];
+                        if (!rs.recieved) {
+                            rs.frame = frame;
+                            rs.recieved = true;
+                            auto is_expected = receiverWindow[expected_recv_sq % pPar("WS").intValue()].recieved;
+                            int move_count = 0;
+                            while (receiverWindow[expected_recv_sq % pPar("WS").intValue()].recieved) {
+                                // TO Network layer
+                                nack_sent = false;
+                                auto& curr = receiverWindow[expected_recv_sq % pPar("WS").intValue()];
+                                curr.recieved = false;
+                                auto original = from_bit_stream(curr.frame->getM_payload());
+
+                                _log << "Uploading payload=["
+                                        << reverseByteStuffing(original, pPar("ESCAPE_BYTE").stringValue()[0])
+                                        << "] and seq_num=["
+                                        << curr.frame->getM_header()
+                                        << "] to the network layer" << std::endl;
+
+                                expected_recv_sq = (expected_recv_sq + 1) % (pPar("SN").intValue() + 1);
+                                move_count ++;
+                            }
+                            EV << "Moving Receiver Window: " << move_count << std::endl;
+                            window_recv_start_sq = expected_recv_sq;
+                            if (is_expected){
+                                auto f = new RawFrame_Base();
+                                f->setM_Type(1); // ACK
+                                f->setM_Target(expected_recv_sq);
+                                scheduleAfter(pPar("PT").doubleValue(), f);
+                            } else {
+                                EV << "Out of order" << std::endl;
+                            }
                         } else {
-                            EV << "Out of order" << std::endl;
+                            EV << "Receiver: Packet dropped (already exists)" << std::endl;
                         }
                     } else {
-                        EV << "Receiver: Packet dropped (already exists)" << std::endl;
+                        EV << "Receiver: Packet dropped (out of window)" << std::endl;
                     }
                 } else {
-                    EV << "Receiver: Packet dropped (out of window)" << std::endl;
-                }
-            } else {
-                EV << "Receiver: CRC ERROR [" << sq << "]" << std::endl;
-                // checksum (CRC) error
-                if (!nack_sent && sq == expected_recv_sq) { // if no nack was sent. send NACK
-                    nack_sent = true; // send a nack
-                    auto f = new RawFrame_Base();
-                    f->setM_Type(0);
-                    f->setM_Target(expected_recv_sq);
-                    scheduleAfter(pPar("PT").doubleValue(), f);
-                    EV << "Receiver: Sending NACK (CRC)" << std::endl;
+                    EV << "Receiver: CRC ERROR [" << sq << "]" << std::endl;
                 }
             }
+
+//            else {
+//                EV << "Receiver: CRC ERROR [" << sq << "]" << std::endl;
+//                // checksum (CRC) error
+//                if (!nack_sent && sq == expected_recv_sq) { // if no nack was sent. send NACK
+//                    nack_sent = true; // send a nack
+//                    auto f = new RawFrame_Base();
+//                    f->setM_Type(0);
+//                    f->setM_Target(expected_recv_sq);
+//                    scheduleAfter(pPar("PT").doubleValue(), f);
+//                    EV << "Receiver: Sending NACK (CRC)" << std::endl;
+//                }
+//            }
         } else { // ACK-NACK
             EV << "Received [ACK/NACK]: " << frame->getM_Target() << std::endl;
             auto target = frame->getM_Target() - 1;

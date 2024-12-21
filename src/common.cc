@@ -1,10 +1,3 @@
-/*
- * common.cc
- *
- *  Created on: Nov 27, 2024
- *      Author: xAbdoMo
- */
-
 #include "common.h"
 
 #include <iostream>

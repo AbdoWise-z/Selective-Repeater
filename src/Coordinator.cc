@@ -41,7 +41,7 @@ void Coordinator::initialize()
         msg->setName("control1");
     }
 
-    EV << "START_TIME=" << time << ", START_NODE=" << node << std::endl;
+    // EV << "START_TIME=" << time << ", START_NODE=" << node << std::endl;
 
     //
     // clear previous run log file

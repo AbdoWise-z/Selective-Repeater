@@ -89,8 +89,9 @@ void SelectiveRepeaterNode::_send_next_message() {
     auto next = msgQueue[0];
     msgQueue.erase(msgQueue.begin());
 
-    EV << "Sending: " << reverseByteStuffing(from_bit_stream(next.frame->getM_payload()), pPar("ESCAPE_BYTE").stringValue()[0] ) << std::endl;
+    // EV << "Sending: " << reverseByteStuffing(from_bit_stream(next.frame->getM_payload()), pPar("ESCAPE_BYTE").stringValue()[0] ) << std::endl;
     _log << "At time [" << simTime() << "], Node[" << _node_id << "] , Introducing channel error with code =[" << next.flags << "]." << std::endl;
+    EV << "At time [" << simTime() << "], Node[" << _node_id << "] , Introducing channel error with code =[" << next.flags << "]." << std::endl;
 
     bool is_modified   = next.flags[0] == '1';
     bool is_lost       = next.flags[1] == '1';
@@ -172,11 +173,11 @@ void SelectiveRepeaterNode::handleMessage(cMessage *msg)
         if (frame) {
             // redirect message .. now send
             send(msg, "out");
-            EV <<"Node[" << _node_id << "] Frame: "<< frame->getM_header() << ", " << frame->getM_Target() << " is out" << std::endl;
+            // EV <<"Node[" << _node_id << "] Frame: "<< frame->getM_header() << ", " << frame->getM_Target() << " is out" << std::endl;
             if (frame->getM_payload() != nullptr) {
                 std::string p = frame->getM_payload();
                 if (p.size() > 16){ // at least 2 flags
-                    EV << "\t" << reverseByteStuffing(from_bit_stream(frame->getM_payload()), pPar("ESCAPE_BYTE").stringValue()[0] ) << std::endl;
+                    // EV << "\t" << reverseByteStuffing(from_bit_stream(frame->getM_payload()), pPar("ESCAPE_BYTE").stringValue()[0] ) << std::endl;
                 }
             }
         }
@@ -202,6 +203,26 @@ void SelectiveRepeaterNode::handleMessage(cMessage *msg)
                      << "]"
                      << std::endl;
 
+                EV << "At time ["
+                   << (simTime())
+                   << "], Node[" << _node_id
+                   << "] [sent] frame with seq_num=["
+                   << rawFrame->getM_header()
+                   << "] and payload=["
+                   << from_bit_stream(rawFrame->getM_payload())
+                   << "] and trailer=["
+                   << rawFrame->getM_Trailer()
+                   << "] , Modified ["
+                   << (rawFrame->getModified_bit())
+                   << "] , Lost ["
+                   << (rawFrame->getIs_lost() ? "Yes" : "No")
+                   << "], Duplicate ["
+                   << (rawFrame->getDup_index())
+                   << "], Delay ["
+                   << (rawFrame->getChannel_delay())
+                   << "]"
+                   << std::endl;
+
                 // construct the real frame
                 auto f = new Frame_Base();
                 f->setM_Target(rawFrame->getM_Target());
@@ -223,7 +244,7 @@ void SelectiveRepeaterNode::handleMessage(cMessage *msg)
                     f->setM_Type(rawFrame->getM_Type());
                     f->setM_Target(rawFrame->getM_Target());
                     scheduleAfter(pPar("TD").doubleValue(), f);
-                    EV << "Receiver: Sending " << (f->getM_Type() == 1 ? "ACK" : "NACK") << "-" << f->getM_Target() << std::endl;
+                    // EV << "Receiver: Sending " << (f->getM_Type() == 1 ? "ACK" : "NACK") << "-" << f->getM_Target() << std::endl;
                 }
                 _log << "At time["
                         << simTime()
@@ -236,6 +257,18 @@ void SelectiveRepeaterNode::handleMessage(cMessage *msg)
                         << "] , loss ["
                         << (drop ? "Yes" : "No")
                         << "]" << std::endl;
+
+                EV << "At time["
+                   << simTime()
+                   << "], Node["
+                   << _node_id
+                   << "] Sending ["
+                   << (rawFrame->getM_Type() == 1 ? "ACK" : "NACK")
+                   << "] with number ["
+                   << rawFrame->getM_Target()
+                   << "] , loss ["
+                   << (drop ? "Yes" : "No")
+                   << "]" << std::endl;
             }
         }
         else if (strcmp(msg->getName(), "process_timer") == 0) {
@@ -271,15 +304,15 @@ void SelectiveRepeaterNode::handleMessage(cMessage *msg)
 
                     if (processTimer->isScheduled()) {
                         // roll-back last frame we were processing
-                        EV << "Rolled Back: "
-                           << ( processSchedular.front().frames[0]->getM_Type() == 2 ?
-                                   reverseByteStuffing(from_bit_stream(processSchedular.front().frames[0]->getM_payload()), pPar("ESCAPE_BYTE").stringValue()[0] )
-                                   : (processSchedular.front().frames[0]->getM_Type() == 0 ? "NACK" : "ACK") )
-                           << std::endl;
+//                        EV << "Rolled Back: "
+//                           << ( processSchedular.front().frames[0]->getM_Type() == 2 ?
+//                                   reverseByteStuffing(from_bit_stream(processSchedular.front().frames[0]->getM_payload()), pPar("ESCAPE_BYTE").stringValue()[0] )
+//                                   : (processSchedular.front().frames[0]->getM_Type() == 0 ? "NACK" : "ACK") )
+//                           << std::endl;
                         cancelEvent(processTimer);
                     }
 
-                    EV << "Timeout on: " << ent.sq_num << std::endl;
+//                    EV << "Timeout on: " << ent.sq_num << std::endl;
                     auto f = new RawFrame_Base();
                     f->setM_Target(ent.original_frame->getM_Target());
                     f->setM_header(ent.sq_num);
@@ -287,9 +320,10 @@ void SelectiveRepeaterNode::handleMessage(cMessage *msg)
                     f->setM_Type(ent.original_frame->getM_Type());
                     f->setM_Trailer(ent.original_frame->getM_Trailer());
 
-                    EV << "Timer Rest" << std::endl;
                     _log << "Time out event at time [" << simTime() << "], at Node["
                          << _node_id << "] for frame with seq_num=[" << ent.sq_num << "]\n";
+                    EV << "Time out event at time [" << simTime() << "], at Node["
+                       << _node_id << "] for frame with seq_num=[" << ent.sq_num << "]\n";
 
                     ProcessResult result;
                     result.frames.push_back(f);
@@ -319,21 +353,21 @@ void SelectiveRepeaterNode::handleMessage(cMessage *msg)
             // Receiver code
             // check if we can receive it
             auto sq = frame->getM_header();
-            EV << "Received Data At: " << simTime() << std::endl;
+//            EV << "Received Data At: " << simTime() << std::endl;
 
             auto window_start = window_recv_start_sq;
             auto window_end   = (window_recv_start_sq + pPar("WS").intValue()) % (pPar("SN").intValue() + 1);
-            EV << "Receiver Window: " << window_start << " -> " << window_end << std::endl;
+//            EV << "Receiver Window: " << window_start << " -> " << window_end << std::endl;
 
             std::string payload = frame->getM_payload();
             std::string crc     = frame->getM_Trailer();
 
             if (!inCircular(sq, window_start, window_end, pPar("SN").intValue() + 1)) {
                 // frame is outside of the window, drop
-                EV << "Receiver: Packet dropped (out of window)" << std::endl;
+                // EV << "Receiver: Packet dropped (out of window)" << std::endl;
             } else {
                 if (evaluateCRC(payload + crc, pPar("CRC_GENERATOR").stringValue())) {
-                    EV << "Receiver: CRC OK [" << sq << "] \"" << reverseByteStuffing(from_bit_stream(frame->getM_payload()), pPar("ESCAPE_BYTE").stringValue()[0] ) << "\"" << std::endl;
+                    // EV << "Receiver: CRC OK [" << sq << "] \"" << reverseByteStuffing(from_bit_stream(frame->getM_payload()), pPar("ESCAPE_BYTE").stringValue()[0] ) << "\"" << std::endl;
                     // valid packet
                     if (inCircular(sq, window_start, window_end, pPar("SN").intValue() + 1)) {
                         if (sq != expected_recv_sq && nack_sent){
@@ -341,7 +375,7 @@ void SelectiveRepeaterNode::handleMessage(cMessage *msg)
                             f->setM_Type(1);
                             f->setM_Target(expected_recv_sq);
                             scheduleAfter(pPar("PT").doubleValue(), f);
-                            EV << "Receiver: Sending ACK (out of order)" << std::endl;
+                            // EV << "Receiver: Sending ACK (out of order)" << std::endl;
                         }
 
                         if (sq != expected_recv_sq && !nack_sent) {
@@ -350,10 +384,10 @@ void SelectiveRepeaterNode::handleMessage(cMessage *msg)
                             f->setM_Type(0);
                             f->setM_Target(expected_recv_sq);
                             scheduleAfter(pPar("PT").doubleValue(), f);
-                            EV << "Receiver: Sending NACK (out of order)" << std::endl;
+                            // EV << "Receiver: Sending NACK (out of order)" << std::endl;
                         }
 
-                        EV << "Receiver: Packet in the Receive Window" << std::endl;
+                        // EV << "Receiver: Packet in the Receive Window" << std::endl;
                         auto& rs = receiverWindow[sq % pPar("WS").intValue()];
                         if (!rs.recieved) {
                             rs.frame = frame;
@@ -373,10 +407,16 @@ void SelectiveRepeaterNode::handleMessage(cMessage *msg)
                                         << curr.frame->getM_header()
                                         << "] to the network layer" << std::endl;
 
+                                EV << "Uploading payload=["
+                                     << reverseByteStuffing(original, pPar("ESCAPE_BYTE").stringValue()[0])
+                                     << "] and seq_num=["
+                                     << curr.frame->getM_header()
+                                     << "] to the network layer" << std::endl;
+
                                 expected_recv_sq = (expected_recv_sq + 1) % (pPar("SN").intValue() + 1);
                                 move_count ++;
                             }
-                            EV << "Moving Receiver Window: " << move_count << std::endl;
+                            // EV << "Moving Receiver Window: " << move_count << std::endl;
                             window_recv_start_sq = expected_recv_sq;
                             if (is_expected){
                                 auto f = new RawFrame_Base();
@@ -384,16 +424,16 @@ void SelectiveRepeaterNode::handleMessage(cMessage *msg)
                                 f->setM_Target(expected_recv_sq);
                                 scheduleAfter(pPar("PT").doubleValue(), f);
                             } else {
-                                EV << "Out of order" << std::endl;
+                                // EV << "Out of order" << std::endl;
                             }
                         } else {
-                            EV << "Receiver: Packet dropped (already exists)" << std::endl;
+                            // EV << "Receiver: Packet dropped (already exists)" << std::endl;
                         }
                     } else {
-                        EV << "Receiver: Packet dropped (out of window)" << std::endl;
+                        // EV << "Receiver: Packet dropped (out of window)" << std::endl;
                     }
                 } else {
-                    EV << "Receiver: CRC ERROR [" << sq << "]" << std::endl;
+                    // EV << "Receiver: CRC ERROR [" << sq << "]" << std::endl;
                 }
             }
 
@@ -410,7 +450,7 @@ void SelectiveRepeaterNode::handleMessage(cMessage *msg)
 //                }
 //            }
         } else { // ACK-NACK
-            EV << "Received [ACK/NACK]: " << frame->getM_Target() << std::endl;
+            // EV << "Received [ACK/NACK]: " << frame->getM_Target() << std::endl;
             auto target = frame->getM_Target() - 1;
             if (target < 0){
                 target += pPar("SN").intValue() + 1;
@@ -422,15 +462,15 @@ void SelectiveRepeaterNode::handleMessage(cMessage *msg)
                 auto it = senderWindow.begin();
                 while (it != senderWindow.end()) {
                     if (it->sq_num == frame->getM_Target()) {
-                        EV << "Re-sending NACK Packet" << std::endl;
+                        // EV << "Re-sending NACK Packet" << std::endl;
 
                         if (processTimer->isScheduled()) {
                             // roll-back last frame we were processing
-                            EV << "Rolled Back: "
-                               << ( processSchedular.front().frames[0]->getM_Type() == 2 ?
-                                       reverseByteStuffing(from_bit_stream(processSchedular.front().frames[0]->getM_payload()), pPar("ESCAPE_BYTE").stringValue()[0] )
-                                    : (processSchedular.front().frames[0]->getM_Type() == 0 ? "NACK" : "ACK") )
-                               << std::endl;
+//                            EV << "Rolled Back: "
+//                               << ( processSchedular.front().frames[0]->getM_Type() == 2 ?
+//                                       reverseByteStuffing(from_bit_stream(processSchedular.front().frames[0]->getM_payload()), pPar("ESCAPE_BYTE").stringValue()[0] )
+//                                    : (processSchedular.front().frames[0]->getM_Type() == 0 ? "NACK" : "ACK") )
+//                               << std::endl;
 
                             cancelEvent(processTimer);
 //                            cancelEvent(senderWindow.back().timer);
@@ -481,7 +521,7 @@ void SelectiveRepeaterNode::handleMessage(cMessage *msg)
                        break;
                     }
                 }
-                EV << "Moving Sender Window: " << i << std::endl;
+                // EV << "Moving Sender Window: " << i << std::endl;
                 _send_next_message();
             }
         }
